@@ -1,0 +1,434 @@
+---
+title: "Spatial Analysis - NYC AirBnB"
+author: "Joseph O'Malley"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+
+***
+
+## Airbnb - NYC AirBnB prices
+
+#### import needed packages
+```{r, echo = TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+require(deldir)
+require(sp)
+library(gstat)
+library(tmap)
+library(GISTools)
+library(maptools)
+library(rgdal)
+library(raster)
+library(tigris)
+library(ggmap)
+library(data.table)
+library(stringr)
+library(sp)
+```
+
+### Transform Data
+#### import & subset nyc airbnb data
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## read in data from local repo
+## http://insideairbnb.com/get-the-data.html
+nyc_airbnb <- read.csv("/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/final_project/listings-2.csv")
+
+## check dimensions of data
+dim(nyc_airbnb)
+
+## keep only entire apartment (no shared rooms, etc)
+nyc_airbnb <- nyc_airbnb[nyc_airbnb$room_type == "Entire home/apt",]
+dim(nyc_airbnb)
+
+## convert last review to date and subset to time of interest
+nyc_airbnb$last_review <- as.Date(nyc_airbnb$last_review)
+nyc_airbnb <- nyc_airbnb[nyc_airbnb$last_review > "2019-05-15",]
+nyc_airbnb <- nyc_airbnb[nyc_airbnb$last_review < "2019-07-15",]
+
+## check dimensions of new subset dataframe
+dim(nyc_airbnb)
+
+## subset columns
+c <- nyc_airbnb[,c("longitude", "latitude", "price", "host_id", "name")]
+## remove na rows
+c <- na.omit(c)
+## remove duplicated rows
+c <- c[!duplicated(c), ]
+dim(c)
+class(c)
+
+#Transform houses dataframe (with the geocoded lat & long coordinates) into SpatialPointDataFrame
+coordinates(c)<- ~longitude+latitude 
+c_sp <- c
+class(c_sp)
+```
+
+
+#### read in geojson file for polygons
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## read in geojson for polygons
+library(rgdal)
+ny <- readOGR("/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/final_project/neighbourhoods.geojson")
+
+class(ny)
+plot(ny)
+
+## connect 2 datasets
+proj4string(ny)
+proj4string(c_sp)
+
+#Basic plot of control points on top of census tract map
+plot(ny)
+plot(c_sp,add=TRUE,col="green")
+
+#Set a projection for both SpatialPointsDataFrame and SpatialPolygon objects
+ny_sp <- spTransform(ny, CRS("+init=EPSG:4326"))
+
+proj4string(c_sp) <- CRS(proj4string(ny))
+c_sp <- spTransform(c_sp,CRS("+init=EPSG:4326"))
+
+#Make the two bounding boxes for both objects the same
+c_sp@bbox<-ny_sp@bbox
+
+proj4string(ny_sp)
+proj4string(c_sp)
+
+## create additional plot
+#Map out the control points
+library(tmap)
+
+tmap_mode("view")
+tm_shape(ny_sp) + tm_polygons(col='neighbourhood_group', title = 'price (in $)', alpha = 0.7) +
+  tm_shape(c_sp) +
+  tm_dots(col="price", palette = "RdBu",
+          title="airbnb_price", size=0.05) +
+  tm_basemap(server = "OpenTopoMap") +
+  tm_legend(legend.outside=TRUE)
+
+```
+
+## Part 1: Spatial Analysis Methods
+### Proximity Polygons
+```{r, warning=FALSE,message=FALSE}
+## create grid
+s.grid <- spsample(ny_sp,type='regular',n=6000)
+
+## set alpha = 1,0
+idw.est <- gstat::idw(price~1,c_sp,
+                      newdata=s.grid,idp=1.0)
+idw.grid <- SpatialPixelsDataFrame(idw.est,data.frame(idw.est)) 
+
+# compare using(alpha) = 2.0 
+idw.est2 <- gstat::idw(price~1,c_sp,
+                       newdata=s.grid,idp=2.0)
+idw.grid2 <- SpatialPixelsDataFrame(idw.est2,data.frame(idw.est2)) 
+
+
+tmap_mode('plot')
+levs <- c(-Inf,150,250,500,1000,Inf)
+idw1 <- tm_shape(idw.grid) + tm_raster(col='var1.pred',title='Alpha = 1',breaks=levs)
+idw2 <- tm_shape(idw.grid2) + tm_raster(col='var1.pred',title='Alpha = 2',breaks=levs)
+tmap_arrange(idw1,idw2)
+```
+
+Taking a look at proximity polygons, I would say using an alpha = 1 gives us little insight.  After switching to alpha = 2, you can start to see areas in manhattan and elsewhere that differentiate themselves.
+  
+### trend surface analysis
+```{r}
+## replace point boundary extent
+ny_sp@bbox <- c_sp@bbox
+
+#dim(c_sp)
+#dim(ny_sp)
+
+## plot prices
+tmap_mode('plot')
+tm_shape(ny) + tm_polygons() +
+  tm_shape(c_sp) +
+  tm_dots(col="price", palette = "RdBu",
+          title="NYC airbnb prices", size=0.05) +
+  tm_basemap(server = "OpenTopoMap") +
+  tm_legend(legend.outside=TRUE)
+
+
+# Create an empty grid where n is the total number of cells
+grd              <- as.data.frame(spsample(c_sp, "regular", n=50000))
+names(grd)       <- c("X", "Y")
+coordinates(grd) <- c("X", "Y")
+gridded(grd)     <- TRUE  # Create SpatialPixel object
+fullgrid(grd)    <- TRUE  # Create SpatialGrid object
+
+# Add P's projection information to the empty grid
+proj4string(grd) <- proj4string(c_sp)
+
+# Define the 1st order polynomial equation
+f.1 <- as.formula(price ~ X + Y) 
+
+# Add X and Y to P
+c_sp$X <- coordinates(c_sp)[,1]
+c_sp$Y <- coordinates(c_sp)[,2]
+
+# Run the regression model
+lm.1 <- lm(f.1, data=c_sp)
+
+# Use the regression model output to interpolate the surface
+dat.1st <- SpatialGridDataFrame(grd, data.frame(var1.pred = predict(lm.1, newdata=grd))) 
+
+# Clip the interpolated raster to shape of NYC polygons
+r   <- raster(dat.1st)
+r.m <- mask(r, ny_sp)
+
+levs <- c(-Inf,150,250,500,1000,Inf)
+# Plot the map
+tm_shape(r.m) + 
+  tm_raster(n=10, palette="RdBu", 
+            title="NYC airbnb $ - regression (1st order)", breaks=levs) +
+  tm_shape(c_sp) + tm_dots(size=0.001) +
+  tm_basemap(server = "OpenTopoMap") +
+  tm_legend(legend.outside=TRUE)
+
+
+# Define the 2nd order polynomial equation
+f.2 <- as.formula(price ~ X + Y + I(X*X)+I(Y*Y) + I(X*Y))
+
+# Add X and Y to P
+c_sp$X <- coordinates(c_sp)[,1]
+c_sp$Y <- coordinates(c_sp)[,2]
+
+# Run the regression model
+lm.2 <- lm( f.2, data=c_sp)
+
+# Use the regression model output to interpolate the surface
+dat.2nd <- SpatialGridDataFrame(grd, data.frame(var1.pred = predict(lm.2, newdata=grd))) 
+
+# Clip the interpolated raster ny polygons
+r   <- raster(dat.2nd)
+r.m <- mask(r, ny_sp)
+
+# Plot the map
+tm_shape(r.m) + 
+  tm_raster(n=10, palette="RdBu",
+            title="NYC airbnb $ - regression (2nd order)", breaks=levs) +
+  tm_shape(c_sp) + tm_dots(size=0.005) +
+  tm_basemap(server = "OpenTopoMap") +
+  tm_legend(legend.outside=TRUE)
+```
+
+#### analysis
+Both trend surface models do a nice job of capturing the general relationship that location has on price. Manhattan and part of Brooklyn that a number of high-priced properities (from the basic plot) were both well captured by the second-order polynomial model.
+
+
+### Krigging
+```{r}
+evgm <- variogram(price~X+Y,c_sp,
+                  boundaries=seq(0,250000,l=51))
+
+fvgm <- fit.variogram(evgm, fit.ranges=FALSE, fit.sills = FALSE,
+                      vgm(psill=50000,model="Sph", range=1200,nugget=0))
+
+plot(evgm,model=fvgm)
+
+krig.est <- krige(price~1,c_sp,newdata=s.grid,model=fvgm)
+krig.grid <- SpatialPixelsDataFrame(krig.est,krig.est@data)
+
+levs <- c(-Inf,150,300,500,1000,Inf)
+## plot
+tmap_mode('view')
+
+krig.map.est <- tm_shape(krig.grid) + 
+  tm_raster(col='var1.pred',breaks=levs,title='Airbnb price data',palette='Reds') + 
+  tm_layout(legend.bg.color='white',legend.outside = TRUE) + tm_basemap(server = "CartoDB.Voyager")
+
+levs <- c(-Inf,150,300,500,1000,Inf)
+krig.map.var <- tm_shape(krig.grid) + 
+  tm_raster(col='var1.var',breaks=levs,title='Estimate Variance',palette='Reds') + 
+  tm_layout(legend.bg.color='white',legend.outside = TRUE) + tm_basemap(server = "CartoDB.Voyager")
+
+## output krigging plots
+tmap_arrange(krig.map.est,krig.map.var)
+```
+
+This krigging example goes beyond the basic linear relationships that we found in the trend surface model.  It is able to capture clusters of expensive areas.  We can see that there are a several clusters in different areas of Manhattan and other areas.  There were many similarities to the proximity polygons output, but is much less rigid.  The estimated variance is highest in areas where there are very few data points, which seems to affirm the idea that a higher standard error when n is lower.
+
+
+## Part 2: Regression
+
+#### import additional packages
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+library(sf)
+library(raster)
+library(mlr)
+library(dplyr)
+library(parallelMap)
+library(GWmodel)
+library(RColorBrewer)
+```
+
+### plot geographically weighted means
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+
+localstats1 <- gwss(c_sp, vars = c("price"), bw=50)
+head(data.frame(localstats1$SDF))
+
+quick.map <- function(spdf,var,legend.title,main.title) {
+  x <- spdf@data[,var]
+  cut.vals <- pretty(x)
+  x.cut <- cut(x,cut.vals)
+  cut.levels <- levels(x.cut)
+  cut.band <- match(x.cut,cut.levels)
+  colors <- brewer.pal(length(cut.levels),'Reds')
+  par(mar=c(1,1,1,1))
+  plot(ny_sp,col='grey85')
+  title(main.title)
+  plot(spdf,add=TRUE,col=colors[cut.band],pch=16)
+  legend('topleft',cut.levels,col=colors,pch=16,bty='n',title=legend.title)
+}
+
+
+par(mfrow=c(1,2))
+quick.map(localstats1$SDF, "price_LM",
+          "USD$", "Geographically Weighted Mean")
+
+quick.map(localstats1$SDF, "price_LSD",
+          "USD$", "Local Standard Deviation")
+
+
+gwr.res <- gwr.basic(price~1,
+                     data=c_sp, adaptive=TRUE, bw=50, kernel='gaussian')
+
+gwr.res
+```
+
+#### read in data
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## take larger window of data
+nyc_airbnb <- read.csv("/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/final_project/listings-2.csv")
+dim(nyc_airbnb)
+#nyc_airbnb <- filter(nyc_airbnb,str_detect(room_type,"Entire home/apt"))
+nyc_airbnb <- nyc_airbnb[nyc_airbnb$room_type == 'Entire home/apt',]
+dim(nyc_airbnb)
+
+nyc_airbnb$last_review <- as.Date(nyc_airbnb$last_review)
+
+nyc_airbnb2 <- na.omit(nyc_airbnb)
+dim(nyc_airbnb2)
+
+nyc_airbnb2 <- nyc_airbnb2[nyc_airbnb2$last_review > "2019-01-01",]
+nyc_airbnb2 <- nyc_airbnb2[nyc_airbnb2$last_review < "2020-01-01",]
+
+## remove outlier properties over 1500
+## nyc_airbnb2 <- nyc_airbnb2[nyc_airbnb2$price < 1500,]
+
+nyc_airbnb2 <- nyc_airbnb2[,c("price", "latitude", "longitude")]
+dim(nyc_airbnb2)
+summary(nyc_airbnb2$price)
+```
+
+### global linear regression
+```{r, echo = TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+fit = glm(price ~ latitude + longitude,
+          family = gaussian(),
+          data = nyc_airbnb2)
+
+class(fit)
+fit
+
+pred_glm = predict(object = fit, type = "response")
+head(pred_glm)
+```
+
+
+#### set up gwr
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+library(mlr)
+# coordinates needed for the spatial partitioning
+coords = nyc_airbnb2[, c("latitude", "longitude")]
+# select response and predictors to use in the modeling
+data = dplyr::select(nyc_airbnb2, -latitude, -longitude)
+# create task
+task = makeRegrTask(data = nyc_airbnb2, target = "price"
+                    , coordinates = coords)
+```
+
+
+### use xgboost for gwr
+```{r, echo = TRUE, results='hide',warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+library(xgboost)
+## using gradient boosting for regression
+
+lrn_bst = makeLearner(cl = "regr.xgboost",
+                      predict.type = "response",
+                      fix.factors.prediction = TRUE)
+
+mod = train(learner = lrn_bst, task = task)
+mlr_fit = getLearnerModel(mod)
+
+perf_level_spatial = makeResampleDesc(method = "SpRepCV", folds = 10, reps = 2)
+perf_level = makeResampleDesc(method = "RepCV", folds = 10, reps = 2)
+
+set.seed(012348)
+cv = mlr::resample(learner = lrn_bst, task = task,
+                   resampling = perf_level, 
+                   measures = mlr::mae)
+
+set.seed(012348)
+cv_spatial = mlr::resample(learner = lrn_bst, task = task,
+                           resampling = perf_level_spatial, 
+                           measures = mlr::mae)
+
+```
+
+#### xgboost model performance
+```{r, echo = TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+print(cv$aggr)
+print(cv_spatial$aggr)
+```
+
+### use h2o deep learning algorithm for gwr
+```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+library(h2o)
+
+## using h2o deeplearning
+lrn_dl = makeLearner(cl = "regr.h2o.deeplearning",
+                      predict.type = "response",
+                      fix.factors.prediction = TRUE)
+
+mod_dl = train(learner = lrn_dl, task = task)
+mlr_fit = getLearnerModel(mod_dl)
+
+perf_level_spatial = makeResampleDesc(method = "SpRepCV", folds = 10, reps = 2)
+perf_level = makeResampleDesc(method = "RepCV", folds = 10, reps = 2)
+
+set.seed(012348)
+cv = mlr::resample(learner = lrn_dl, task = task,
+                   resampling = perf_level, 
+                   measures = mlr::mae)
+
+set.seed(012348)
+cv_spatial = mlr::resample(learner = lrn_dl, task = task,
+                           resampling = perf_level_spatial, 
+                           measures = mlr::mae)
+
+```
+
+#### h2o model performance
+```{r, echo = TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## print performance measure (mae)
+print(cv$aggr)
+print(cv_spatial$aggr)
+```
+
+## Conclusion
+
+The two classifiers I used for weighted regression were xgboost and h2o deep leanring approach. Looking at the mean absolute error made the most sense to me in this instance because it's purely saying how far off (in $) was the prediction for each classifier.  On average mae for the xgboost model test set was 133.9 for the non-spatial cross-validation and 118.9 for the spatial cross validation. The average mae for the h2o deep learning model test set was 80.6 for the non-spatial cross-validation and 71.2 for the spatial cross validation. I prefer the h2o deep learning model for a couple reasons - lower mae for both cv methods and was lower for spatial cv so we can have some confidence that it's generalizable.  To start, I was underwhelmed with the performance of these models considering that the median price was 156.0 with and IQR of only 101.0 (119.0-220).  Thinking about it more, I was able to see the effects that outliers could have on this mae performance measure.  Additionally, there is no way to distiguish between quality of size of the properties (unless you analyze the free text).  I removed outliers (34 of 15,245) observations that were over 1500/night, which reduced mae.  This change was not drastic, so I can assume that additional variance in price per night can be explained by addiitional features besides location (i.e. - bedrooms, quality/updates, time of week/year it was listed, etc.).
+
+
+

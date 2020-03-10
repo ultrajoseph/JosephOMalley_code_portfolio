@@ -1,0 +1,709 @@
+---
+title: "Flight Delay Analysis (Unsupervised Learning)"
+author: "Joseph O'Malley"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: yes
+---
+
+
+***
+## Data Overview
+These data are from the U.S. Department of Transportation (retrieved from Kaggle.com) and tracks the on-time performance of domestic flights operated by large carriers.  It includes 5.8 million flight records throughout the calendar year of 2015 (the MCI subset contains 77,320 flights).  The set of 31 feature columns includes: origin, destination, date information, scheduled depart time (of day), wheels up/down time, taxi time, cancellation/diverted (y/n), cancellation reason, type of delay (weather, late aircraft, etc).  There are two additional columns I plan to add that include latitude and longitude of departure city, bringing the total columns to 33.
+
+
+```{r, echo = FALSE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+# dataset available available on UCI data site
+#setwd("~/")
+flight_data = "/Users/ultrajosef/Documents/JosephOMalley_CodePortfolio_staging/R_Unsupervised_Learning/final_proj/flights.csv"
+airport_detail = "/Users/ultrajosef/Documents/JosephOMalley_CodePortfolio_staging/R_Unsupervised_Learning/final_proj/airports.csv"
+
+require(formatR)
+```
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+#The dataset of employee satisfaction
+flights_df <- read.csv(flight_data,sep=",",header = T)
+lat_lon_df <- read.csv(airport_detail,sep=",",header = T)
+
+#Check basic info
+dim(flights_df)
+```
+
+### Problem description:
+In building this model, I look to explore associations that lead to longer delays.  I expect time of year and time of day to have effects on delays, especially when combined with weather related factors like origin/destination airports and latitude/longitude.  Additionally, I expect airports to have strong effects on taxi times and departure delays.  My models will aim to look at the relationships between some of these interconnected feature columns and reduce these features into factors that capture their combined meaning.
+
+The models I plan to use will give decision makers at Southwest insight into what conditions (or combination of conditions) are more prone to delays.  This information can help them to schedule flights more strategically to avoid delays that kill customer loyalty and top line revenue.  It could potentially inform certain departure/arrival cities to target/avoid, flight time of day, flight time of year, regions to avoid, and an combination of these (and other) feature columns.  Lastly, it could show competitor airlines that are performing better/worse in certain conditions and allow management to analyze their processes to see what makes them more efficient - potentially mimicking parts of their processes in those conditions.
+
+### Analysis Methods:
+There are a number of methods that I have had exposure to available to use for this analysis.  The initial starting point for my analysis is using correspondence analysis, which looks at combinations of crosstabs to analyze similarity (of airlines, in my case).  The only disadvantage is that it requires a specific aggregated data format, but allow me to look at specific areas of interest.  The next step to explore between delays is Association Rules.  This method also allows for tight control over what relationships to explore and puts it in a quantified odds ratio for benchmarking, but it does have the drawback of not being able to handle continuous datatypes (requiring “binning” – as does correspondence analysis).
+
+Cluster analysis comes in several forms and groups similar data across the entire set of columns.  These clusters may be tuned in several ways and assigned to a given observation.  I could then look at common characteristics of these observations and compare them to the bench marks.  Certain flights could receive review based on being put into a more “high risk” cluster.  However, without specific knowledge of what made a particular flight high risk, I prefer a more quantifiable feature (or combination).  
+
+Using Factor Analysis, I will be able to assign a set number of “factors” that reduce the common variance by giving different weightings to the full set.  This reduces dimensionality and will allow me to interpret the underlying meaning.  Additionally, when combined with a simple linear regression it can show how each of these “factors” interacts with the dependent variable (“Departure delay”).
+
+Of the methods discussed, I plan to (using R) do:
+
+#### EDA -> Correspondence Analysis -> Association Rules -> Factor Analysis -> Regression
+
+## Exploratory Data Analysis
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## reduce dataset to only flights in and out of Kansas City
+flights_df2 <- flights_df[flights_df$ORIGIN_AIRPORT == "MCI" | flights_df$DESTINATION_AIRPORT == "MCI", ]
+
+## Join latitude/longitude info for both 
+flights_df2 <- merge(x = flights_df2, y = lat_lon_df, by.x = "ORIGIN_AIRPORT", by.y = "IATA_CODE", all.x = TRUE)
+flights_df2 <- merge(x = flights_df2, y = lat_lon_df, by.x = "DESTINATION_AIRPORT", by.y = "IATA_CODE", all.x = TRUE)
+```
+
+```{r, echo = TRUE,warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+#Check basic info of combined dataset
+head(flights_df2)
+dim(flights_df2)
+summary(flights_df2)
+str(flights_df2)
+```
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 50)}
+names(flights_df2)
+
+## drop unnecessary columns
+flights_df2 <- flights_df2[ , -which(names(flights_df2) %in% c("AIRPORT.x","AIRPORT.y"
+                                                       , "COUNTRY.x", "COUNTRY.y", "YEAR"))]
+
+dim(flights_df2)
+```
+
+#### subset to departure MCI flights
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 50)}
+## origin = MCI
+flights_MCI_origin_df <- flights_df2[flights_df2$ORIGIN_AIRPORT == "MCI",]
+flights_MCI_origin_df <- flights_MCI_origin_df[ , -which(names(flights_MCI_origin_df) %in% c("CITY.x","STATE.x"
+                                                               , "LATITUDE.x", "LONGITUDE.x"))]
+
+## desitination = MCI
+flights_MCI_departure_df <- flights_df2[flights_df2$DESTINATION_AIRPORT == "MCI",]
+flights_MCI_departure_df <- flights_MCI_departure_df[ , -which(names(flights_MCI_departure_df) %in% c("CITY.y","STATE.y"
+                                                                                             , "LATITUDE.y", "LONGITUDE.y"))]
+
+dim(flights_MCI_origin_df)
+dim(flights_MCI_departure_df)
+```
+
+```{r, echo = TRUE,warning=FALSE, results="hide",message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+summary(flights_MCI_origin_df)
+summary(flights_MCI_departure_df)
+```
+
+#### subset to southwest flights
+```{r, echo = TRUE,warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+southwest_flights <- flights_df2[which(flights_df2$AIRLINE == "WN"),]
+```
+
+#### SW flights by month
+```{r, echo = TRUE,warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+prop.table(table(flights_df2$MONTH))
+hist(flights_df2$MONTH, col = 'blue', main = "# of flights in/out MCI (by month)", xlab = "Month")
+## no 10th month, with the highest travel month of June - 9.94%, lowest in February 7.39%
+prop.table(table(southwest_flights$MONTH))
+## Southwest had the most flights in July 10.3%, lowest in February 7.4%
+```
+
+#### SW flights by Day of week
+```{r, echo = TRUE,warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+prop.table(table(flights_df2$DAY_OF_WEEK))
+hist(flights_df2$DAY_OF_WEEK, col = 'red', main = "# of flights in/out MCI (by day of week)", xlab = "Day of Week")
+
+prop.table(table(flights_df2$AIRLINE))
+```
+
+```{r, echo = TRUE,warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+summary(flights_MCI_origin_df$DISTANCE)
+## distance ranged from 152-1499 miles, with a median of 643
+southwest_origin_mci <- flights_MCI_origin_df[which(flights_MCI_origin_df$AIRLINE == "WN"),]
+summary(southwest_origin_mci$DISTANCE)
+## distance ranged from 237-1489, median of 666
+```
+
+#### bin continuous variables
+```{r, echo = TRUE,warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+flights_df2$DEPARTURE_TIME_binned <- cut(flights_df2$DEPARTURE_TIME,
+                   breaks=c(0,9,1300,1800,2400),
+                   labels=c("12p-9a", "9a-1p", "1-6p", "6-12p"),
+                   right=FALSE, ordered_result=TRUE)
+
+## repeat process for all continuous variables based on distribution & logical breakoints
+```
+
+
+```{r, echo = FALSE,warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+flights_df2$SCHEDULED_DEPARTURE_binned <- cut(flights_df2$SCHEDULED_DEPARTURE,
+                                         breaks=c(0,900,1300,1800,2400),
+                                         labels=c("12p-9a", "9a-1p", "1-6p", "6-12a"),
+                                         right=FALSE, ordered_result=TRUE)
+
+flights_df2$DEPARTURE_DELAY_binned <- cut(flights_df2$DEPARTURE_DELAY,
+                                              breaks=c(-30,0,30,90,1500),
+                                              labels=c("ahead", "0-30", "30-90", ">90"),
+                                              right=FALSE, ordered_result=TRUE)
+
+flights_df2$TAXI_OUT_binned <- cut(flights_df2$TAXI_OUT,
+                                          breaks=c(0,9,15,30,180),
+                                          labels=c("<10", "10-15", "15-30", ">30"),
+                                          right=FALSE, ordered_result=TRUE)
+
+flights_df2$WHEELS_OFF_bin <- cut(flights_df2$WHEELS_OFF,
+                                   breaks=c(0,300,900,1300,1800,2400),
+                                   labels=c("12p-3a","3-9a", "9a-1p", "1-6p", "6-12a"),
+                                   right=FALSE, ordered_result=TRUE)
+
+
+flights_df2$ELAPSED_TIME_bin <- cut(flights_df2$ELAPSED_TIME,
+                                    breaks=c(0,90,120,180,260),
+                                    labels=c("<90", "90-120", "120-180", "180+"),
+                                    right=FALSE, ordered_result=TRUE)
+
+flights_df2$SCHEDULED_TIME_bin <- cut(flights_df2$SCHEDULED_TIME,
+                                  breaks=c(0,90,120,180,260),
+                                  labels=c("<90", "90-120", "120-180", "180+"),
+                                  right=FALSE, ordered_result=TRUE)
+
+flights_df2$AIR_TIME_bin <- cut(flights_df2$AIR_TIME,
+                                      breaks=c(0,90,120,180,260),
+                                      labels=c("<90", "90-120", "120-180", "180+"),
+                                      right=FALSE, ordered_result=TRUE)
+
+flights_df2$WHEELS_ON_bin <- cut(flights_df2$WHEELS_ON,
+                                breaks=c(0,1000,1500,1900,2400),
+                                labels=c("<10a", "10a-3p", "3-7p", "12a"),
+                                right=FALSE, ordered_result=TRUE)
+
+flights_df2$TAXI_IN_binned <- cut(flights_df2$TAXI_IN,
+                                   breaks=c(0,9,15,30,180),
+                                   labels=c("<10", "10-15", "15-30", ">30"),
+                                   right=FALSE, ordered_result=TRUE)
+
+flights_df2$SCHEDULED_ARRIVAL_binned <- cut(flights_df2$SCHEDULED_ARRIVAL,
+                                  breaks=c(0,1000,1500,1900,2400),
+                                  labels=c("<10a", "10a-3p", "3-7p", "12a"),
+                                  right=FALSE, ordered_result=TRUE)
+
+flights_df2$ARRIVAL_TIME_binned <- cut(flights_df2$ARRIVAL_TIME,
+                                            breaks=c(0,1000,1500,1900,2400),
+                                            labels=c("<10a", "10a-3p", "3-7p", "12a"),
+                                            right=FALSE, ordered_result=TRUE)
+
+flights_df2$ARRIVAL_DELAY_binned <- cut(flights_df2$ARRIVAL_DELAY,
+                                          breaks=c(-65,0,30,90,1500),
+                                          labels=c("ahead", "0-30", "30-90", ">90"),
+                                          right=FALSE, ordered_result=TRUE)
+
+flights_df2$AIR_SYSTEM_DELAY_binned <- cut(flights_df2$AIR_SYSTEM_DELAY,
+                                        breaks=c(-10,0,10,90,600),
+                                        labels=c("no_delay", "0-10", "10-90", ">90"),
+                                        right=FALSE, ordered_result=TRUE)
+
+flights_df2$SECURITY_DELAY_binned <- cut(flights_df2$SECURITY_DELAY,
+                                           breaks=c(-10,0,10,90,600),
+                                           labels=c("no_delay", "0-10", "10-90", ">90"),
+                                           right=FALSE, ordered_result=TRUE)
+
+flights_df2$AIRLINE_DELAY_binned <- cut(flights_df2$ARRIVAL_DELAY,
+                                        breaks=c(-65,0,30,90,1500),
+                                         labels=c("no_delay", "0-10", "10-90", ">90"),
+                                         right=FALSE, ordered_result=TRUE)
+
+flights_df2$LATE_AIRCRAFT_DELAY_binned <- cut(flights_df2$LATE_AIRCRAFT_DELAY,
+                                        breaks=c(0,10,30,90,1500),
+                                        labels=c("0-10", "10-30", ">90","no_delay"),
+                                        right=FALSE, ordered_result=TRUE)
+
+flights_df2$WEATHER_DELAY_binned <- cut(flights_df2$WEATHER_DELAY,
+                                              breaks=c(0,10,800),
+                                              labels=c("0-10", "10+"),
+                                              right=FALSE, ordered_result=TRUE)
+
+flights_df2$LATITUDE.x_binned <- cut(flights_df2$LATITUDE.x,
+                                        breaks=c(0,36,40,48),
+                                        labels=c("<36.0", "36-40.0","40-48.0"),
+                                        right=FALSE, ordered_result=TRUE)
+
+flights_df2$LATITUDE.y_binned <- cut(flights_df2$LATITUDE.y,
+                                     breaks=c(0,36,40,48),
+                                     labels=c("<36.0", "36-40.0","40-48.0"),
+                                     right=FALSE, ordered_result=TRUE)
+
+flights_df2$LONGITUDE.x_binned <- cut(flights_df2$LONGITUDE.x,
+                                     breaks=c(-125,-95,-90,-70),
+                                     labels=c("<-95.0", "-95-90","-90-70"),
+                                     right=FALSE, ordered_result=TRUE)
+
+flights_df2$LONGITUDE.y_binned <- cut(flights_df2$LONGITUDE.y,
+                                     breaks=c(-125,-95,-90,-70),
+                                     labels=c("<-95.0", "-95-90","-90-70"),
+                                     right=FALSE, ordered_result=TRUE)
+
+
+prop.table(table(flights_MCI_origin_df$DEPARTURE_TIME))
+```
+
+```{r, echo = TRUE,warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+hist(flights_MCI_origin_df$DEPARTURE_TIME, col = 'red', main = "# of flights in/out MCI (time of day)", xlab = "Time of Day")
+```
+
+### check new binned columns (binned by quantile dist)
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+names(flights_df2)
+```
+
+### EDA findings:
+I started by doing some exploratory data analysis.  I started by looking by looking to see how time of year affected flight delays (Figure 1.2) and found there was no 10th month, with the highest travel month of June - 9.94%, lowest in February 7.39%. Then looked at Southwest specifically seeing it had the most flights in July 10.3%, lowest in February 7.4%. I then moved to days of the week (Figure 1.2), with days ranging their days ranging form 14-15.1%, lowest on Saturday 11.0%. Distance ranged from 152-1499 miles, with a median of 643, while Southwest distance ranged from 237-1489. median of 666. I concluded my EDA by seeing what the competitive landscape was in Kansas City and found 53.6% of flights were on southwest, delta second with 13.1% - 3 major carriers have none (Jetblue, Hawaiian, Virgin).
+
+## Correspondence Analysis
+
+#### subset to Southwest airlines flights
+```{r, echo = TRUE,warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+##install.packages("descr", "FactoMineR", "factoextra")
+
+library("FactoMineR")
+library("descr")
+library("factoextra")
+
+## analyze Southwest flights
+southwest_flights <- flights_df2[which(flights_df2$AIRLINE == "WN"),]
+summary(southwest_flights)
+
+southwest_flights_ca <- southwest_flights[ 
+  , which(names(southwest_flights) %in% c("AIRLINE","MONTH","DAY_OF_WEEK"                                                              ,"SCHEDULED_ARRIVAL_binned","DEPARTURE_TIME_binned"
+            , "SCHEDULED_DEPARTURE_binned", "DEPARTURE_DELAY_binned"
+            ,"TAXI_OUT_binned","WHEELS_OFF_bin", "ELAPSED_TIME_bin"
+            , "SCHEDULED_TIME_bin","AIR_TIME_bin","WHEELS_ON_bin"
+            , "TAXI_IN_binned", "ARRIVAL_TIME_binned"                                                                                  ,"ARRIVAL_DELAY_binned","AIR_SYSTEM_DELAY_binned"
+            , "SECURITY_DELAY_binned", "AIRLINE_DELAY_binned"
+            , "LATE_AIRCRAFT_DELAY_binned", "WEATHER_DELAY_binned"
+            , "LATITUDE.x_binned", "LATITUDE.y_binned"
+            , "LONGITUDE.x_binned", "LONGITUDE.y_binned"))]
+
+summary(southwest_flights_ca)
+```
+
+#### transform data for conjoint analysis
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+southwest_flights_ca1<-transform(southwest_flights_ca, freq.neib = ave(seq(nrow(southwest_flights_ca)), DEPARTURE_DELAY_binned, FUN = length))
+mean(southwest_flights_ca1$freq.neib)
+
+## eliminate low frequency items
+ab2<-southwest_flights_ca1[southwest_flights_ca1$freq.neib > 100,]
+names(ab2)
+```
+
+#### flight delays by month 
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## crosstab data
+southwest_flights_ca1$delay_by_month<-paste(ab2$DEPARTURE_DELAY_binned,ab2$MONTH,sep="")
+
+#head(ab)
+ab3<-crosstab(ab2$DEPARTURE_DELAY_binned, ab2$MONTH)
+## transform data to crosstab table
+ab3$tab
+
+## test for statistical significance
+chisq.test(ab3$tab)
+####### correspondence analysis
+#The general format of CA
+CA(ab3$tab, ncp = 5, graph = TRUE)
+hou.ca <- CA(ab3$tab, graph = TRUE)
+
+print(hou.ca)
+ab.ca = CA(ab3$tab, ncp = 5, graph = TRUE)
+fviz_ca_biplot(ab.ca, repel = TRUE)
+```
+
+#### flights by region
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+southwest_flights_ca2<-transform(southwest_flights_ca, freq.neib = ave(seq(nrow(southwest_flights_ca)), DEPARTURE_DELAY_binned, FUN = length))
+mean(southwest_flights_ca2$freq.neib)
+
+## eliminate low frequency items
+ab2<-southwest_flights_ca2[southwest_flights_ca2$freq.neib > 100,]
+#names(ab2)
+
+## crosstab data
+ab2$lat_lon<-paste(ab2$LATITUDE.x_binned,ab2$LONGITUDE.x_binned,sep="_")
+
+## test for statistical significance
+# names(ab2)
+ab3<-crosstab(ab2$DEPARTURE_DELAY_binned, ab2$lat_lon)
+## transform data to crosstab table
+ab3$tab
+
+chisq.test(ab3$tab)
+####### correspondence analysis
+#The general format of CA
+CA(ab3$tab, ncp = 5, graph = TRUE)
+#X : a data frame (contingency table)
+#ncp : number of dimensions kept in the final results.
+#graph : a logical value. If TRUE a graph is displayed.
+
+hou.ca <- CA(ab3$tab, graph = TRUE)
+
+print(hou.ca)
+ab.ca = CA(ab3$tab, ncp = 5, graph = TRUE)
+fviz_ca_biplot(ab.ca, repel = TRUE)
+```
+
+#### delays by airline
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## susbset to top 4 airlines out of MCI
+top_4_air_df <- flights_df2[flights_df2$AIRLINE == "DL" | flights_df2$AIRLINE == "WN" | flights_df2$AIRLINE == "AA" | flights_df2$AIRLINE == "EV", ]
+
+## analyze Southwest flights
+all_flights_ca <- top_4_air_df[ 
+  , which(names(top_4_air_df) %in% c("AIRLINE","MONTH","DAY_OF_WEEK"                                                                              ,"SCHEDULED_ARRIVAL_binned","DEPARTURE_TIME_binned"
+                       , "SCHEDULED_DEPARTURE_binned", "DEPARTURE_DELAY_binned"
+                       ,"TAXI_OUT_binned","WHEELS_OFF_bin"
+                       , "ELAPSED_TIME_bin", "SCHEDULED_TIME_bin"
+                       ,"AIR_TIME_bin","WHEELS_ON_bin"
+                       , "TAXI_IN_binned", "ARRIVAL_TIME_binned"
+                       ,"ARRIVAL_DELAY_binned","AIR_SYSTEM_DELAY_binned"
+                       , "SECURITY_DELAY_binned", "AIRLINE_DELAY_binned"
+                       , "LATE_AIRCRAFT_DELAY_binned", "WEATHER_DELAY_binned"
+                       , "LATITUDE.x_binned", "LATITUDE.y_binned"
+                       , "LONGITUDE.x_binned", "LONGITUDE.y_binned"))]
+
+all_flights_ca2<-transform(all_flights_ca, freq.neib = ave(seq(nrow(all_flights_ca)), DEPARTURE_DELAY_binned, FUN = length))
+mean(all_flights_ca2$freq.neib)
+
+## eliminate low frequency items
+ab2<-all_flights_ca2[all_flights_ca2$freq.neib > 500,]
+# names(ab2)
+
+## crosstab data
+ab2$lat_lon<-paste(ab2$LATITUDE.x_binned,ab2$LONGITUDE.x_binned,sep="_")
+
+# names(ab2)
+ab3<-crosstab(ab2$DEPARTURE_DELAY_binned, ab2$AIRLINE)
+## transform data to crosstab table
+ab3$tab
+
+## test for statistical significance
+chisq.test(ab3$tab)
+####### correspondence analysis
+#The general format of CA
+CA(ab3$tab, ncp = 5, graph = TRUE)
+#X : a data frame (contingency table)
+#ncp : number of dimensions kept in the final results.
+#graph : a logical value. If TRUE a graph is displayed.
+
+hou.ca <- CA(ab3$tab, graph = TRUE)
+
+print(hou.ca)
+ab.ca = CA(ab3$tab, ncp = 5, graph = TRUE)
+fviz_ca_biplot(ab.ca, repel = TRUE)
+```
+
+### correspondence analysis findings:
+I then moved on to Correspondence Analysis, which allows us to analyze how different features interact and required binning of variables then subsetting (created bins based on quantile distribution and smoothed to round numbers when applicable).  I first looked at departure_delay by month (Figure 2.1), by airline (Figure 2.2), region (Latitude/Longitude) (Figure 2.3 & 2.4).
+Top 4 airlines account for 84.8% of all flights (Figure 2.5). EV is skywest airlines, which serves as a regional connector for AA, Delta, United, and Alaskan airline.  2.9 percent of sw flights had “severe” delays…90minuted> (Delta with just 2.1 percent), but when you consider skywest operates some of their connecting flights (with 4.1 percent extended delays), it may not be so bad. Additionally, looking at the chart show that lattitude/longitudes in west, specifically in the Southwest United States (ironically) –chart right – have more short-mid range delays (0-90 minutes) than average. I finished by running a significance testing for relationships between these binned variables, and all easily passed (Figure 2.6)
+
+
+## Association Rules
+```{r, echo=TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+#install.packages("arules")
+library(arules)
+library(arulesViz)
+library(data.table)
+
+## analyze Southwest flights
+southwest_flights <- flights_df2[which(flights_df2$AIRLINE == "WN"),]
+## create uniqueID columns
+southwest_flights$FLIGHT_ID<-seq.int(nrow(southwest_flights))
+
+## subset flights for A-rules/market-basket analysis (mba)
+southwest_flights_mba <- southwest_flights[ 
+                    , which(names(southwest_flights) %in% c("FLIGHT_ID","MONTH","DAY_OF_WEEK"
+                    ,"SCHEDULED_ARRIVAL_binned","DEPARTURE_TIME_binned"
+                    , "SCHEDULED_DEPARTURE_binned", "DEPARTURE_DELAY_binned"
+                    ,"TAXI_OUT_binned","WHEELS_OFF_bin"
+                    , "ELAPSED_TIME_bin", "SCHEDULED_TIME_bin"
+                    ,"AIR_TIME_bin","WHEELS_ON_bin"
+                    , "TAXI_IN_binned", "ARRIVAL_TIME_binned"
+                    ,"ARRIVAL_DELAY_binned","AIR_SYSTEM_DELAY_binned"
+                    , "SECURITY_DELAY_binned", "AIRLINE_DELAY_binned"
+                    , "LATE_AIRCRAFT_DELAY_binned", "WEATHER_DELAY_binned"
+                    , "LATITUDE.x_binned", "LATITUDE.y_binned"
+                    , "LONGITUDE.x_binned", "LONGITUDE.y_binned"
+                    , "DESTINATION_AIRPORT", "ORIGIN_AIRPORT"))]
+
+```
+
+```{r, echo=TRUE, warning=FALSE, results = "hide", message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+#Check basic info
+summary(southwest_flights_mba)
+str(southwest_flights_mba)
+
+
+### identify each unique flight
+tid <- as.character(southwest_flights_mba[["FLIGHT_ID"]])
+southwest_flights_mba <- southwest_flights_mba[ , -which(names(southwest_flights_mba) %in% c("FLIGHT_ID"))]
+
+### convert all column datatypes to factors
+for(i in 1:ncol(southwest_flights_mba)) southwest_flights_mba[[i]] <- as.factor(southwest_flights_mba[[i]])
+
+### convert dataframe to transaction set (for A-Rules)
+trans <- as(southwest_flights_mba, "transactions")
+
+### set transactionIDs
+transactionInfo(trans)[["FLIGHT_ID"]] <- tid
+```
+
+#### inspect transactional data format
+```{r, echo=TRUE, warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+inspect(trans[1:2])
+```
+
+```{r, echo=TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## crosstab data
+seg.trans <- trans
+summary(seg.trans)
+
+seg.rules <- apriori(seg.trans, parameter=list(support=0.02, conf=0.4,
+                                               target="rules",maxlen=4))
+
+summary(seg.rules)
+plot(seg.rules)
+```
+
+#### inspect top rules
+```{r, echo=TRUE, results = "hide", warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## looking at the orginal set of rules yields 241489 rules (with support of 2%, confidence of 40%)
+seg.hi <- head(sort(seg.rules, by="lift"), 20)
+
+inspect(seg.hi)
+```
+inspecting the top rules shows that certain lat/lon and cities are covariate, as are delays
+
+#### adjust parameters and check top rules
+```{r, echo=TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+sw_flights_trans <- as(southwest_flights_mba, "transactions")
+itemFrequencyPlot(sw_flights_trans, topN = 20)
+
+basic_rules <- apriori(sw_flights_trans, parameter=list(support=0.05, conf=0.5,
+                                                    target="rules",maxlen=4))
+
+## sort rules by "lift" -> odds ratio
+basic_rules <-sort(basic_rules, by = c("lift"))
+inspect(basic_rules[1:5])
+
+```
+picked up inferred relations (i.e. {AIR_TIME_bin=<90, LATITUDE.y_binned=<36.0,LONGITUDE.y_binned=<-95.0} => {DESTINATION_AIRPORT=DAL})
+
+#### analyze rules with Day of Week
+```{r, echo=TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+day_of_week_rules <- apriori(seg.trans, parameter = list(support =
+                                                          0.001, confidence = 0.05), 
+                         appearance=list(lhs=c("ORIGIN_AIRPORT=MCI","DAY_OF_WEEK=1"
+                                               ,"DAY_OF_WEEK=2","DAY_OF_WEEK=3"
+                                               , "DAY_OF_WEEK=4","DAY_OF_WEEK=5"
+                                               ,"DAY_OF_WEEK=6", "DAY_OF_WEEK=7"))) 
+
+
+month_rules_partial <- subset(day_of_week_rules, items %pin% "DEPARTURE_DELAY_binned")
+inspect(sort(month_rules_partial[1:10], by = c("lift","count", "confidence")))
+
+
+```
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+dow_rules_partial <- subset(day_of_week_rules, items %pin% "AIR_TIME_bin")
+inspect(sort(dow_rules_partial[1:5], by = c("lift","count", "confidence")))
+```
+-- 1.13x more likely to be delayed 30-90 minutes on Thursday
+-- looked at day of week by destination and found nothing significant
+-- day of the week by time in the air, longer flights (1.16 lift) 2-3 hours on Saturdays
+
+#### extended weather delays by destination
+```{r, echo=TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+weather_rules <- apriori(sw_flights_trans, parameter = list(support =
+                  0.0002, confidence = 0.20, maxlen=4), appearance=list(lhs=c("WEATHER_DELAY_binned=10+"))) 
+
+
+weather_rules_partial <- subset(weather_rules, items %pin% "LON" |items %pin% "LAT")
+inspect(sort(weather_rules_partial[1:5], by = c("lift","count", "confidence")))
+```
+
+### Association Rules findings:
+The analysis using A-Rules first required transforming the dataset into a transactional style dataset (long) grouped by unique flightID.  I tested several values for lift, support, and confidence.  There was a tradeoff for finding rules that had a large enough sample size to be generalizable and rules that gave us high value (lift)… eventually we settled on the
+tunings to: seg.rules <- apriori(seg.trans, parameter=list(support=0.02, conf=0.4,
+                                               target="rules",maxlen=4))
+This initial criteria led to a set Initial Criteria led to 241,489 “rules” (Figure 3.1). So, I inspected the results in “lift” order, which is effectively an odds ratio. The initial set was difficult to interpret and picked up some inferred relationships (i.e. {AIR_TIME_bin=<90, LATITUDE.y_binned=<36.0,LONGITUDE.y_binned=<-95.0} => {DESTINATION_AIRPORT=DAL}).  I could then tune filter these list to include certain values of interest using “lhs” and “rhs” (i.e. effects of latitude and longitude on different delay types) (See figure 3.2).  I started my process by looking at natural relationships to day of the week (Figure 3.3) and found 1.13x more likely to be delayed 30-90 minutes on Thursday.  I further filtered day of week by destination and found nothing significant. Then looking at day of the week by time in the air, found that flights tended to be longer (1.16 lift) 2-3 hours on Saturdays.  I then analyzed how latitude/longitude related to weather delays and found 5.7x more likely to be on a delayed flight between 12p-9a and South and West US more likely to get delayed for weather ({WEATHER_DELAY_binned=10+} => {LONGITUDE.x_binned=-90-70}       0.001639305 0.2753036  1.191307    68 )
+
+
+## Factor Analysis
+
+#### subset to Southwest Airlines flights
+```{r, echo=TRUE, warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+##install.packages("mltools", "nFactors", "GPArotation", "psych")
+require(mltools)
+require(nFactors)
+library(psych)
+library(GPArotation)
+
+southwest_flights <- flights_df2[which(flights_df2$AIRLINE == "WN"),]
+## create uniqueID columns
+southwest_flights$FLIGHT_ID<-seq.int(nrow(southwest_flights))
+
+## subset
+southwest_flights_fa <- southwest_flights[ 
+  , which(names(southwest_flights) %in% c("MONTH","DAY_OF_WEEK"
+              ,"SCHEDULED_ARRIVAL","DEPARTURE_TIME", "SCHEDULED_DEPARTURE"
+              ,"TAXI_OUT","WHEELS_OFF", "ELAPSED_TIME", "SCHEDULED_TIME"
+              ,"AIR_TIME","WHEELS_ON", "TAXI_IN", "ARRIVAL_TIME"
+              ,"ARRIVAL_DELAY","AIR_SYSTEM_DELAY", "SECURITY_DELAY", "AIRLINE_DELAY"
+              , "WEATHER_DELAY", "LATITUDE.x", "LATITUDE.y", "LONGITUDE.x"
+              , "LONGITUDE.y"))]
+
+southwest_flights_fa_dependent <- southwest_flights[ , which(names(southwest_flights) %in% c("DEPARTURE_DELAY"))]
+
+### convert columns to be one hot encoded to factors
+southwest_flights_fa$MONTH <- as.factor(southwest_flights_fa$MONTH)
+southwest_flights_fa$DAY_OF_WEEK <- as.factor(southwest_flights_fa$DAY_OF_WEEK)
+
+### one-hot encode factor columns
+southwest_flights_fa <- as.data.table(southwest_flights_fa)
+southwest_flights_fa <- one_hot(southwest_flights_fa, cols = c("MONTH","DAY_OF_WEEK")
+                                    , sparsifyNAs = FALSE
+                                    , dropCols = TRUE, dropUnusedLevels = FALSE)
+
+## drop column to avoid perfect multicolinearity
+southwest_flights_fa <- as.data.frame(southwest_flights_fa)
+southwest_flights_fa <- southwest_flights_fa[ , -which(names(southwest_flights_fa) %in% c("DAY_OF_WEEK_2"))]
+
+#We replace missing observation with variable means (this step depends on the real research needs and your decisions on the missing observations)
+southwest_flights_fa[] <- lapply(southwest_flights_fa, function(x) { 
+  x[is.na(x)] <- mean(x, na.rm = TRUE)
+  x
+})
+
+```
+
+#### scale dataframe
+```{r, echo=TRUE, warning=FALSE, message=FALSE, tidy=TRUE, results = "hide", tidy.opts = list(width.cutoff = 60)}
+southwest_flights_fa.scaled <- scale(southwest_flights_fa)
+southwest_flights_fa <- as.data.frame(southwest_flights_fa.scaled)
+
+## check dimensions & summary of scaled df
+summary(southwest_flights_fa)
+dim(southwest_flights_fa)
+```
+
+#### find optimal number of Factors
+```{r, echo=TRUE, warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+#nScree give some indicators about the suggested number of factors, in this case 1 or 14
+nScree(southwest_flights_fa)
+
+#Get eigenvalues. They should be >1 in order to be considered, but not necessarily included
+eig<- eigen(cor(southwest_flights_fa))
+
+# print top 20 eigenvalues
+print(eig$values[1:25])
+
+#This way gives the graph showing suggested number of factors.
+ap <- parallel(subject=nrow(southwest_flights_fa),var=ncol(southwest_flights_fa))
+nS <- nScree(x=eig$values, aparallel=ap$eigen$qevpea)
+plotnScree(nS)
+
+parallel <- fa.parallel(southwest_flights_fa, fm = 'minres', fa = 'fa')
+parallel
+
+
+#We run FA using "Varimax" rotation with "minres" (minimum residual)
+#The "scores=" gives the factor scores that we will use in future steps. This is another important step
+southwest_flights_fa4 <- fa(southwest_flights_fa,nfactors = 4,rotate = "Varimax",fm="minres",scores="regression")
+#southwest_flights_fa4
+
+#The root mean square of residuals (RMSR) is 0.05. This is acceptable as this value should be closer to 0. 
+#RMSEA ranges from 0 to 1, with smaller values indicating better model fit. 
+
+
+# print  top factor loadings, which can then interpret what variables are loaded on what factor and we can term the factor with a new name. Both positive and negative loading are useful for indicating the meaning of a factor
+print(southwest_flights_fa4$loadings,cutoff = 0.1, sort = TRUE)
+
+# (optional) function visually shows the loading
+#fa.diagram(retail.fa)
+```
+
+#### name factors (based on loading weights)
+```{r, echo=TRUE, warning=FALSE,results= "hide",message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+# rename factors based on weightings analyzed.  This dimesnionally reduces the number and simplifies interpretation
+southwest_flights_fa4.scores<-as.data.frame(southwest_flights_fa4$scores)
+
+colnames(southwest_flights_fa4.scores) <- c("scheduled_v_actual_timing"
+                                            , "time_in_air_and_latlon"
+                                            , "delays_and_taxi_time", "MR4")
+southwest_flights_fa4.scores
+```
+
+#### join factors to dependent variables for regression
+```{r, echo=TRUE, warning=FALSE, message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+southwest_flights_fa.final<-cbind(southwest_flights_fa_dependent, southwest_flights_fa4.scores)
+
+names(southwest_flights_fa.final)
+#head(southwest_flights_fa.final)
+
+## write to csv for part 2
+#write.csv(southwest_flights_fa.final, file="southwest_flights_fa.csv")
+```
+### Factor Analysis findings:
+I first had to one hot encode the factor columns (Day of week & Month) then scaled (zscores) the data and removed the dependent variable (departure_delay), and columns to avoid perfect multicollineaity. Initial metrics suggested (1, 4, 2, 21, 21) (Figure 4.1).  After looking at the eigenvalues – found that 21 were above the needed 1.0 threshold (top 3 – 5.17, 3.27, 1.53)… showing significant drop off in common variance explained.  I decided to move forward with 4 (based on the chart) though the top 2 had a majority of the explanatory power but included 4 based on the chart to reduce “noise” in the top 2 features and see if there was any intepretible pattern in the additional factors.  The top group weighted columns by grouping (see figure 4.2):
+
+1- “timing_vs_scheduled” – scheduled departure, dep_time, wheels_off, wheels_on, Scheduled_arrived, actual_arrived
+2- “time_in_air_lat/lon” – scheduled time, elapsed time,  Scheduled_arrived, actual_arrived, latitude.x/y (negative weight), longitude.y (negative weight)
+3- “delays_and_taxi_time” – taxi in/out, arrival/weather/air_system delays
+4- “MR4” – mix of negative weights
+
+## Factor Analysis: OLS Regression
+#### OLS Regression - using newly formed factors
+```{r, echo=TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 50)}
+
+summary(southwest_flights_fa.final)
+dim(southwest_flights_fa.final)
+
+## drop NA records of dependent variable
+southwest_flights_fa.final <- southwest_flights_fa.final[!is.na(southwest_flights_fa.final$southwest_flights_fa_dependent),]
+## droped 370/41481 records
+dim(southwest_flights_fa.final)
+
+## look at prior distribution of target - Grocery food
+summary(southwest_flights_fa.final$southwest_flights_fa_dependent)
+## create linear regression(s) to check feature importance
+Sample.model1<-lm(data = southwest_flights_fa.final, southwest_flights_fa_dependent ~ scheduled_v_actual_timing+time_in_air_and_latlon+delays_and_taxi_time+MR4)
+
+summary(Sample.model1)
+## get odds ratio
+exp(Sample.model1$coefficients)
+```
+
+#### FA Regression findings:
+I then joined the resulting factor columns as features to the hold out dependent variable (continuous - departure_delay) and looked at the prior distribution of the dependent variable
+I then hen performed linear regression and found that all factors reached statistical significance (Figure 5.2), though the r2 was still just 0.171 -  ‘scheduled_vs_actual_timing’ had the highest positive weight (aka increased the delay the most, with increase).
+
+# Analysis Finidngs
+
+### results
+I was pleased with the output of my analysis as it led to several solid findings.  Delta has less “severe” delays out of MCI.  Based on analysis of Latitude/Longitude, SW united states has more delays and weather related delays relative to other regions.  Passengers are 13 percent more likely to be delayed 30-90 minutes on Thursday.  Flights are 5.7x more likely to be on a delayed flight between 12a-9a.  In further analysis I would look into reason for this disparity (primarily night delayed flights that went out early the next morning?)
+
+### reccomendations
+In the Kansas City market, Delta ostensibly has better performance with “severe” delays out of MCI.  Management should analyze Delta staffing/policies – to try to understand why they have less delays.  Without pricing data it’s tough to tell, but possibly move focus to areas outside of the Southwest.  Based on analysis of Latitude/Longitude, the southwest United States has more delays and weather delays relative to other regions.  Lastly look at increasing staff on Thursdays, (pilots, flex shifts, etic.).
+
+### limitations
+Granularity in understanding the exact issue that caused a flight to depart late (i.e. reason code). It’s hard to look at these delays in isolation of pricing, if anything this could be an interesting feature. Looking into additional cities and their interconnectedness of these flight networks would be huge in understanding causes of delays (i.e. weather in another city with a plane scheduled from MCI flight is). More recent Data would help the validity of model (this data comes from 2015).  An ideal state could be doing trend analysis and near real time “at-risk” flight analysis.
+
+```

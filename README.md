@@ -3,6 +3,8 @@
 
 #### this repo contains a few projects I've completed in my course work and free time
 
+rpubs: https://rpubs.com/jjomalley94
+
 ***
 
 1. Unsupervised Learning
@@ -10,3 +12,10 @@
   + Factor Analysis
   + Weighted Regression
   + Flight Delay Analysis
+
+2. Spatial Analysis
+  + Plotting
+  + Proximity Polygons
+  + Trend Surface Analysis
+  + Krigging
+  + Geographically-Based Prediction (using xgboost & h2o)
