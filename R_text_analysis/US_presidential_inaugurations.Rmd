@@ -1,0 +1,731 @@
+---
+title: "Text Analysis: United States Presidential Inauguration Speeches"
+author: "Joseph O'Malley"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    number_sections: false
+    toc: true
+    theme: cosmo
+    highlight: tango
+    code_folding : hide
+--- 
+
+<link rel="stylesheet" type="text/css" href="http://cdn.datatables.net/1.10.5/css/jquery.dataTables.min.css">
+<script src="http://code.jquery.com/jquery-2.1.2.min.js"></script>
+<script src="http://cdn.datatables.net/1.10.5/js/jquery.dataTables.min.js"></script>
+
+<script type="text/javascript">
+         $(document).ready(function() {
+             $(".dtable").DataTable();
+         } );
+</script> 
+
+
+<br>
+
+***
+The dataset was retrieved from Kaggle (<https://www.kaggle.com/adhok93/presidentialaddress/home>)
+and contains all 58 inauguration speeches of presidents from the George Washington's first 
+address to present day.
+
+***
+
+##### Donald Trump (above) proving his eyes were stronger than the sun.
+
+```{r echo=FALSE, fig.height=5, fig.align="left"}
+knitr::include_graphics('/Users/ultrajosef/Documents/JosephOMalley_CodePortfolio_staging/R_Text_Analytics/InaugurationSpeehes/data/trump_eclipse.jpg')
+```
+
+<br>
+
+***
+
+<br>
+
+
+#### Import Data
+```{r}
+inaug_speeches <- read.csv("/Users/ultrajosef/Documents/JosephOMalley_CodePortfolio_staging/R_Text_Analytics/InaugurationSpeehes/data/inaug_speeches.csv")
+```
+
+<br>
+
+***
+
+<br>
+
+
+
+#### Install Necessary Packages
+```{r}
+##install needed packages
+#install.packages(c("psych", "data.table", "stringr", "lubridate","tidyr", "dplyr", "tidytext", 
+    ##"ggplot2", "RWeka", "quanteda", "tm","wordcloud", "lsa", "ggcorrplot", "plotly", "rJava", "NLP", 
+    ##"openNLP","openNLPmodels.en", "reshape", "tibble","googleVis", "magrittr", "RColorBrewer"))
+```
+
+#1. Exploratory Data Analysis (EDA)
+```{r, echo=FALSE, warning=FALSE,message=FALSE}
+require(data.table)
+library(psych)
+require(knitr)
+require(kableExtra)
+require(dplyr)
+```
+
+
+```{r}
+##initial exploration
+str(inaug_speeches)
+inaug_speeches_dt <- as.data.table(inaug_speeches)
+names(inaug_speeches)
+
+##count unique values in each column
+apply(inaug_speeches[, c(1:ncol(inaug_speeches))], 2, function(x) length(unique(x)))
+
+##counts of each unique president
+dt <- inaug_speeches_dt[, .(number_of_distinct_records = uniqueN(text)), by = Name]
+
+##convert to kable tables
+kable(dt, escape = F, "html", table.attr = "class='dtable'")  %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+```
+##### information about Kable Tables: <https://haozhu233.github.io/kableExtra/awesome_table_in_html.html>
+##### information about Dplyr: <https://datascienceplus.com/data-manipulation-with-dplyr/>
+
+<br>
+
+***
+
+<br>
+
+
+#2. Text Cleaning/Manipulation
+#####stringr <https://www.rstudio.com/resources/cheatsheets/>
+#####<https://stackoverflow.com/questions/39993715/how-to-remove-unicode-u00a6-from-string>
+```{r}
+##convert strings we will analyze to charachters
+inaug_speeches_dt <- inaug_speeches_dt[, text:=as.character(text)]
+inaug_speeches_dt <- inaug_speeches_dt[, text2:=as.character(text2)]
+##combine text columns in r (only one that couldn't fit into one excel cell)
+inaug_speeches_dt$text <- apply(inaug_speeches_dt[ , c("text", "text2") ] ,1 , paste , collapse = "" )
+
+
+##create duplicate text column (for manipulation)
+##trim whitespace and covert text to lowercase
+inaug_speeches_dt$text_final <- trimws(inaug_speeches_dt$text)
+
+
+##convert to regex and add additional text cleanin using stringr
+##remove encoding errors using stringr (i.e. <U+AO97>) see <https://stackoverflow.com/questions/39993715/how-to-remove-unicode-u00a6-from-string>
+inaug_speeches_dt$text_final <- gsub("\\s*<u\\+\\w+>\\s*", " ", inaug_speeches_dt$text_final)
+inaug_speeches_dt$text_final <- gsub("\\s*<U\\+\\w+>\\s*", " ", inaug_speeches_dt$text_final)
+##convert whitespace to single space
+inaug_speeches_dt$text_final <- gsub("\\s", " ", inaug_speeches_dt$text_final)
+##remove non-reg charachters
+inaug_speeches_dt$text_final <- gsub("[^[A-Za-z0-9 ][:punct:]]", "", inaug_speeches_dt$text_final)
+```
+<br>
+
+***
+
+<br>
+
+#3. Date Formatting
+#####convert dates using lubridate: <https://www.rstudio.com/resources/cheatsheets/>
+#####date conventions: <https://www.statmethods.net/input/dates.html>
+```{r, results = 'hide', warning=FALSE,message=FALSE}
+##load require packages
+require(stringr)
+require(lubridate)
+require(tidyr)
+require(dplyr)
+
+```
+
+```{r, warning=FALSE,message=FALSE}
+##check unique 
+#unique(inaug_speeches_dt$Date)
+
+##make copy of original date format for manipulation
+inaug_speeches_dt$DateOriginal <- inaug_speeches_dt$Date
+##edit missmatched date format (Clinton 1997)
+inaug_speeches_dt$Date <- gsub("20-Jan-97", "Monday, January 20, 1997", inaug_speeches_dt$Date)
+
+## split current date formats
+inaug_speeches_dt <- separate(inaug_speeches_dt, "Date", c('DayOfWeek', 'MonthDay', 'Year'), sep = ",") 
+
+inaug_speeches_dt$MonthDay <- trimws(inaug_speeches_dt$MonthDay)
+inaug_speeches_dt$Year <- trimws(inaug_speeches_dt$Year)
+
+##replace NA Values in main date column with 
+#inaug_speeches_dt$MonthDay <- ifelse(is.na(inaug_speeches_dt$MonthDay), inaug_speeches_dt$DayOfWeek, inaug_speeches_dt$MonthDay)
+
+##recode factors for First Inaugural address
+inaug_speeches_dt$Inaugural.Address <- recode_factor(inaug_speeches_dt$Inaugural.Address, "Inaugural Address" = "First Inaugural Address")
+
+                
+##replace non-day of the week with "unknown"
+inaug_speeches_dt$DayOfWeek <- 
+  ifelse(inaug_speeches_dt$DayOfWeek == "Monday", "Monday", 
+         ifelse(inaug_speeches_dt$DayOfWeek == "Tuesday", "Tuesday", 
+                ifelse(inaug_speeches_dt$DayOfWeek == "Wednesday", "Wednesday", 
+                       ifelse(inaug_speeches_dt$DayOfWeek == "Thursday", "Thursday", 
+                              ifelse(inaug_speeches_dt$DayOfWeek == "Friday", "Friday", 
+                                     ifelse(inaug_speeches_dt$DayOfWeek == "Saturday", "Saturday", 
+                                            ifelse(inaug_speeches_dt$DayOfWeek == "Sunday", "Sunday", "Unknown")))))))
+##check unique days of week
+dt <- inaug_speeches_dt[, .(number_of_distinct = uniqueN(text_final)), by = DayOfWeek] 
+
+kable(dt, escape = F, "html", table.attr = "class='dtable'")  %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+
+##concatenate DayMonth and Year
+inaug_speeches_dt$Date <- apply(inaug_speeches_dt[, c('MonthDay', 'Year')], 1, paste, collapse = ",")
+inaug_speeches_dt$Date <- gsub(",NA", "", inaug_speeches_dt$Date)
+
+##check unique month/day
+#unique(inaug_speeches_dt$MonthDay)
+
+##multidate function in r
+multidate <- function(data, formats){
+  data <- gsub("nd", "", data, perl = TRUE)
+  a<-list()
+  for(i in 1:length(formats)){
+    a[[i]]<- as.Date(data,format=formats[i])
+    a[[1]][!is.na(a[[i]])]<-a[[i]][!is.na(a[[i]])]
+  }
+  a[[1]]
+}
+
+###converts disparate date types (list) to common format
+inaug_speeches_dt$Date <- multidate(inaug_speeches_dt$Date, 
+                                     c("%m/%d/%Y","%d.%m.%Y","%d %b %y", "%d %b %y", "%B %d, %Y",
+                                       "%B %d %Y", "%d-%b-%y", "%m.%d.%Y", "%d %b, %Y", "%A, %m/%d/%y",
+                                       "%A, %B %d, %Y", "%d of %B %Y", "%m%d%y", "%d%m%Y", "%d-%m-%Y",
+                                       "%A %B %d %Y", "%d %B, %Y", "%d %B %Y", "%d %B %Y", "%B %d %Y",
+                                       "%B %d, %Y", "%A %B %d, %Y", "%h %d %Y", "%m/%d%y", "%d/%m/%Y",
+                                       "%d/%m/%Y", "%m%d%y", "%d %B %Y", "%B %d,%Y", "%b. %d,%Y",
+                                       "%b-%d-%Y", "%m/%d.%Y"))
+
+###change format to m/d/Y
+inaug_speeches_dt$Date <- format(inaug_speeches_dt$Date, "%m/%d/%Y")
+#unique(inaug_speeches_dt$Date)
+```
+<br>
+
+***
+
+<br>
+
+#4. Number of Charachters and Number of Words
+```{r}
+##calculate number of charachters
+inaug_speeches_dt$nchar <- nchar(inaug_speeches_dt$text_final)
+
+##calculate number of words
+nwords <- nwords <- function(string, pseudo=F){
+  ifelse( pseudo, 
+          pattern <- "\\S+", 
+          pattern <- "[[:alpha:]]+" 
+  )
+  str_count(string, pattern)
+}
+
+##calculate number of words using nwords() function
+inaug_speeches_dt$num_words <- nwords(inaug_speeches_dt$text_final)
+
+
+##create new column for column labels for President
+inaug_speeches_dt$PresidentNumber <- seq.int(nrow(inaug_speeches_dt))
+inaug_speeches_dt$Speech <- apply(inaug_speeches_dt[, c('PresidentNumber', 'Name')], 1, paste, collapse = " ")
+```
+
+```{r echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+## Visualizing speech length
+
+require(tidytext)
+require(dplyr)
+require(ggplot2)
+```
+
+```{r}
+##create barchart in ggplot
+
+inaug_speeches_dt %>%
+  unnest_tokens(word,text_final) %>%
+  group_by(Speech) %>%
+  summarise(num_words=n()) %>%
+  mutate(mean_words=mean(num_words)) %>%
+  ggplot(aes(x=Speech,y=(num_words)))+geom_bar(stat = "identity",width=0.5, 
+                                               aes(fill = inaug_speeches_dt$Inaugural.Address)) +
+  scale_fill_manual(values = c("red", "goldenrod", "blue", "light blue", "black")) +
+  theme(axis.text.x = element_text(vjust=1,angle=90)) + theme(legend.position="bottom") +
+  geom_text(aes(label=inaug_speeches_dt$Year), vjust=0,angle=90,size=2.5,hjust=0)+ylim(c(0,11500)) +
+  labs(title="Speech Length",
+       caption="United States: Inauguration Speeches")
+```
+
+
+```{r, warning=FALSE}
+##checkaverage speech length by inaigural address number
+inaug_groups <-inaug_speeches_dt %>%
+  group_by(Inaugural.Address) %>%
+  summarise_at(vars(num_words), funs(mean(., na.rm=TRUE))) %>% 
+  arrange(desc(num_words)) %>% 
+  mutate(num_words = round(num_words, 2))
+
+
+inaug_groups <- as.data.table(inaug_groups)
+
+##convert to kable tables
+kable(inaug_groups, escape = F, "html", table.attr = "class='dtable'")  %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+
+## subset columns
+inaug_speeches_clean <- subset(inaug_speeches_dt, select = c("PresidentNumber", "Name","Inaugural.Address", 
+                                                             "DayOfWeek", "Year", "Date", "DateOriginal", 
+                                                             "text_final","nchar", "num_words", "Speech"))
+
+##################################### Export Cleaned Data ##########################################
+#setwd('file/path')
+#write.csv(inaug_speeches_clean, "inaug_speeches_clean.csv")
+```
+
+***
+
+<br>
+
+
+#5. N-Grams Frequency
+
+```{r echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+require(RWeka)
+require(quanteda)
+require(tm)
+require(data.table)
+```
+Adjust N-Gram selction (one or more) in this section
+```{r}
+##check structure of the data
+#str(inaug_speeches_clean)
+
+###create data table for conversion of free text to charachters
+inaug_speeches_clean <- as.data.table(inaug_speeches_clean)
+
+###specify the text column to be used 
+text <- inaug_speeches_clean$text_final
+
+###custom stopwords list
+custom_stopwords <- (c(stopwords("english"), "otherwords", "a0"))
+
+##################### tokenize using quanteda ######################################
+##tokenization and text cleaning
+toks <- tokens(text, remove_punct = TRUE,
+               remove_symbols = TRUE)
+toks <- tokens_tolower(toks)
+#toks <- tokens_wordstem(toks, language = quanteda_options("language_stemmer"))
+toks <- tokens_remove(toks, custom_stopwords)
+###create n-grams, specify size (sparsity/computing power are a consideration here)
+toksNgrams <- tokens_ngrams(toks, n = c(2, 3), concatenator = "_")
+
+
+###convert to data frame matrix
+dfm_toksNgrams <- as.matrix(toksNgrams)
+dfm_toksNgrams <- dfm(toksNgrams)
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, c(stopwords("english"), "high_school"))
+###remove leading and trailing stopwords from n-grams
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, 
+                             pattern = c(paste0("^", stopwords("english"), "_"), 
+                                         paste0("_", stopwords("english"), "$")), 
+                             valuetype = "regex")
+
+##rename rows of matrix to presidents names
+row.names(dfm_toksNgrams) <- inaug_speeches_clean$Speech
+
+##frequency dist
+term_frequency <- colSums(dfm_toksNgrams)
+
+# Sort term_frequency in descending order
+term_frequency <- sort(term_frequency, decreasing = TRUE)
+term_frequency <- as.data.frame(term_frequency)
+
+# extract column names (words/ngrams) to new column in r
+setDT(term_frequency, keep.rownames = TRUE)[]
+# alternative method of extract column names (words/ngrams) to new column in r
+# term_frequency$names <- rownames(term_frequency)
+```
+
+```{r,echo = TRUE, results = 'hide', warning=FALSE,message=FALSE}
+## write term frequency into new file (optional)
+
+#setwd('local/file/path')
+#write.csv(term_frequency, "inaug_term_frequency.csv")
+
+```
+
+## Frequency Visualizations
+```{r echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+require(ggplot2)
+library(wordcloud)
+```
+
+```{r}
+##subset top 40 rows
+term_frequency2 <- term_frequency %>% 
+  arrange(desc(term_frequency)) %>%
+  head(40)
+
+## Plot a barchart of the most frequent words/phrases 
+ggplot(term_frequency2, aes(x=reorder(rn, -term_frequency),y=(term_frequency))) + 
+            geom_bar(stat = "identity",width=0.5, 
+            aes(fill = term_frequency2$term_frequency)) +
+            theme(axis.text.x = element_text(vjust=1,angle=90)) + theme(legend.position="none") +
+            geom_text(aes(label=term_frequency), vjust=0,angle=90,size=2.5,hjust=0)+
+            labs(title="Most Common Phrases", caption="United States: Inauguration Speeches")
+
+
+```
+<br>
+
+***
+
+<br>
+
+#6. Comparison Cloud
+
+***
+
+##### These comparison/commonality clouds compare the language used by the 57th (Obama II) and 58th (Trump) Presidents. These visualizations can compare/contrast more than two texts, however.
+
+Adjust N-Gram selction (one or more) in this section
+```{r, echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+##check structure of the data
+#str(inaug_speeches_clean)
+
+###create data table for conversion of free text to charachters
+inaug_speeches_clean <- as.data.table(inaug_speeches_clean)
+
+###specify the text column to be used 
+text <- inaug_speeches_clean$text_final
+
+###custom stopwords list
+custom_stopwords <- (c(stopwords("english"), "otherwords", "a0"))
+
+####################### tokenize using quanteda #####################################
+##tokenization and text cleaning
+toks <- tokens(text, remove_punct = TRUE,
+               remove_symbols = TRUE)
+toks <- tokens_tolower(toks)
+#toks <- tokens_wordstem(toks, language = quanteda_options("language_stemmer"))
+toks <- tokens_remove(toks, custom_stopwords)
+###create n-grams, specify size (sparsity/computing power are a consideration here)
+toksNgrams <- tokens_ngrams(toks, n = c(1), concatenator = "_")
+
+
+###convert to data frame matrix
+dfm_toksNgrams <- as.matrix(toksNgrams)
+dfm_toksNgrams <- dfm(toksNgrams)
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, c(stopwords("english"), "high_school"))
+###remove leading and trailing stopwords from n-grams
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, 
+                             pattern = c(paste0("^", stopwords("english"), "_"), 
+                                         paste0("_", stopwords("english"), "$")), 
+                             valuetype = "regex")
+
+##rename rows of matrix to presidents names
+row.names(dfm_toksNgrams) <- inaug_speeches_clean$Speech
+
+##frequency dist
+term_frequency <- colSums(dfm_toksNgrams)
+
+# Sort term_frequency in descending order
+term_frequency <- sort(term_frequency, decreasing = TRUE)
+term_frequency <- as.data.frame(term_frequency)
+
+# extract column names (words/ngrams) to new column in r
+setDT(term_frequency, keep.rownames = TRUE)[]
+# alternative method of extract column names (words/ngrams) to new column in r
+# term_frequency$names <- rownames(term_frequency)
+```
+
+#####convert from quanteda to tm: https://rdrr.io/cran/quanteda/man/convert.html>
+```{r, warning=FALSE,message=FALSE}
+
+##can compare 2 or more texts (president numbers)
+dat <- dfm_toksNgrams[c(57, 58),]
+##convert from quanteda dfm to tm DTM
+dat <- convert(dat, to = "tm")
+##convert from DTM to TDM
+dat <- as.TermDocumentMatrix(dat)
+dat <- as.matrix(dat)
+
+##create clouds from wordcloud package
+comparison.cloud(dat,max.words=80,random.order=FALSE,colors=c("#1F497D","#C0504D", "light blue"),
+                                                  main="Differences Between Inauguration Speeches")
+commonality.cloud(dat,random.order=FALSE,max.words=50, color="#1F497D",main="Commonalities in Inauguration Speeches")
+
+```
+<br>
+
+***
+
+<br>
+
+#7. Cosine Similarity
+***
+
+A measure of similarity between two non-zero vectors of an inner product space that measures the cosine of the angle between them.  We can use this measure to gauge relative similarity of two texts.
+
+#####Cosine similarity: <https://www.youtube.com/watch?v=7cwBhWYHgsA>
+```{r,  echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+library(lsa)
+require(ggplot2)
+require(RWeka)
+require(quanteda)
+require(tm)
+require(data.table)
+```
+
+```{r, echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+
+########################## Create tokens for cosine similarity ##########################
+
+##check structure of the data
+#str(inaug_speeches_clean)
+
+###create data table for conversion of free text to charachters
+inaug_speeches_clean <- as.data.table(inaug_speeches_clean)
+
+###specify the text column to be used 
+text <- inaug_speeches_clean$text_final
+
+###custom stopwords list
+custom_stopwords <- (c(stopwords("english"), "otherwords"))
+
+################################# tokenize using quanteda ###############################
+##tokenization and text cleaning
+toks <- tokens(text, remove_punct = TRUE,
+               remove_symbols = TRUE)
+toks <- tokens_tolower(toks)
+#toks <- tokens_wordstem(toks, language = quanteda_options("language_stemmer"))
+toks <- tokens_remove(toks, custom_stopwords)
+###create n-grams, specify size (sparsity/computing power are a consideration here)
+toksNgrams <- tokens_ngrams(toks, n = c(1), concatenator = "_")
+
+
+###convert to data frame matrix
+dfm_toksNgrams <- as.matrix(toksNgrams)
+dfm_toksNgrams <- dfm(toksNgrams)
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, c(stopwords("english"), "high_school", "a0"))
+###remove leading and trailing stopwords from n-grams
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, 
+                             pattern = c(paste0("^", stopwords("english"), "_"), 
+                                         paste0("_", stopwords("english"), "$")), 
+                             valuetype = "regex")
+
+
+########################### Transform Matrix ###########################################
+
+
+## (see https://www.youtube.com/watch?v=7cwBhWYHgsA)
+##can compare 2 or more texts
+CosineSim_dfm <- dfm_toksNgrams[c(1:nrow(dfm_toksNgrams)),]
+##convert from quanteda dfm to tm DTM
+CosineSim_dfm <- convert(CosineSim_dfm, to = "tm")
+
+##check dimensions of dfm
+dim(CosineSim_dfm)
+
+## get Cosine similarity in transposed Matrix format
+CosineSim_Matrix <- cosine(t(as.matrix(CosineSim_dfm)))
+##check dimensions and transpose
+dim(CosineSim_Matrix)
+##convert to data frame
+CosineSim_Matrix <- as.data.frame(CosineSim_Matrix)
+
+###################### join to primary dataset (optional) #########################################
+##add cosine similarities to original text
+## create unique ID to join Presdident Names to Cosine similarity text
+CosineSim_Matrix$UniqueResp <- seq.int(nrow(CosineSim_Matrix))
+inaug_speeches_clean$UniqueResp <- seq.int(nrow(inaug_speeches_clean))
+##cartesian join
+#inaug_speeches_wCosine <- merge(x = inaug_speeches_clean, y = CosineSim_Matrix, by = "UniqueResp", all.x = TRUE)
+
+```
+
+
+
+## Cosine Similarity Visualization
+```{r,  echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+require(ggcorrplot)
+```
+
+```{r}
+######################### visualize cosine similarity matrix #########################
+##Convert RowNames
+##convert row and column names
+
+CosineSim_Matrix <- as.data.frame(CosineSim_Matrix)
+row.names(CosineSim_Matrix) <- inaug_speeches_clean$Speech
+colnames(CosineSim_Matrix) <- t(inaug_speeches_clean$Speech)
+
+##subset matrix of presidents
+CosineSim_Matrix_1900 <- CosineSim_Matrix[c(30:32, 34:37, 41:42, 44:46, 48:49, 51, 52, 54, 56, 58), 
+                                            c(30:32, 34:37, 41:42, 44:46, 48:49, 51, 52, 54, 56, 58)]
+
+##correlation matrix plot
+# ggcorrplot(CosineSim_Matrix, type = "lower", lab = TRUE, legend.title = "Cos Sim", 
+#           title = "Cosine Similarity of Inauguration Speeches",
+#           show.diag = TRUE, outline.color = "black", lab_size = 2)
+
+##correlation matrix plot for presidents 1st Inauguration speeches since 1900
+ggcorrplot(CosineSim_Matrix_1900, type = "lower", lab = TRUE, legend.title = "Cos Sim", 
+           title = "Cosine Similarity of Inauguration Speeches",
+           show.diag = TRUE, outline.color = "black", lab_size = 2)
+```
+
+
+As the visualizations show, there seems to be similar language across the different speeches.  Based on our phrase frequencies, we may start to form the idea that these speeches use similar language.
+
+<br>
+
+***
+
+<br>
+
+#8. Lexical Diversity
+***
+
+Lexical Diversity refers to "the range of different words used in a text, with a greater range indicating a higher diversity"
+see <https://rdrr.io/github/kbenoit/quanteda/man/textstat_lexdiv.html>
+```{r, echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+require(RWeka)
+require(quanteda)
+require(tm)
+```
+
+```{r}
+##check structure of the data
+#str(inaug_speeches_clean)
+
+###create data table for conversion of free text to charachters
+inaug_speeches_clean <- as.data.table(inaug_speeches_clean)
+
+###specify the text column to be used 
+text <- inaug_speeches_clean$text_final
+
+###custom stopwords list
+custom_stopwords <- (c(stopwords("english"), "otherwords"))
+###tokenize using quanteda
+
+##tokenization and text cleaning
+toks <- tokens(text, remove_punct = TRUE,
+               remove_symbols = TRUE)
+toks <- tokens_tolower(toks)
+#toks <- tokens_wordstem(toks, language = quanteda_options("language_stemmer"))
+toks <- tokens_remove(toks, custom_stopwords)
+###create n-grams, specify size (sparsity/computing power are a consideration here)
+toksNgrams <- tokens_ngrams(toks, n = c(1), concatenator = "_")
+
+
+###convert to data frame matrix
+dfm_toksNgrams <- as.matrix(toksNgrams)
+dfm_toksNgrams <- dfm(toksNgrams)
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, c(stopwords("english"), "high_school", "a0"))
+###remove leading and trailing stopwords from n-grams
+dfm_toksNgrams <- dfm_remove(dfm_toksNgrams, 
+                             pattern = c(paste0("^", stopwords("english"), "_"), 
+                                         paste0("_", stopwords("english"), "$")), 
+                             valuetype = "regex")
+
+##calculate lexical diversity
+dt <- textstat_lexdiv(dfm_toksNgrams, measure = c("TTR", "C", "R", "CTTR", "U", "S", "Maas"), log.base = 10)
+
+row.names(dt) <- inaug_speeches_clean$Speech
+
+
+kable(dt, escape = F, "html", table.attr = "class='dtable'")  %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+```
+
+```{r}
+##calculate create new column with chosen lexical diversity  
+LexDiv_r <- textstat_lexdiv(dfm_toksNgrams, measure = "CTTR", log.base = 10)
+
+## create ID column to join on
+LexDiv_r$ID <- 1:nrow(LexDiv_r)
+inaug_speeches_clean$ID <- 1:nrow(inaug_speeches_clean)
+
+## join lexical diversity df to full speech df
+inaug_speeches_clean <- merge(inaug_speeches_clean, LexDiv_r, by = "ID")
+```
+
+## Visualize Lexical Diversity
+```{r, echo=TRUE, results = 'hide', warning=FALSE,message=FALSE}
+require(ggplot2)
+require(plotly)
+```
+###Lexical Diversity over time
+```{r warning=FALSE,message=FALSE}
+##convert strings we will visualize to numeric
+inaug_speeches_clean <- inaug_speeches_clean[, Year:=as.numeric(Year)]
+
+## look at number of Inaugurations by Address Number
+dt <- inaug_speeches_clean[, .(number_of_distinct = uniqueN(PresidentNumber)), by = Inaugural.Address]
+
+kable(dt, escape = F, "html", table.attr = "class='dtable'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+
+###Time Series Plot 
+##subset
+first_inaug <- 
+  inaug_speeches_clean %>%
+  filter(Inaugural.Address == "First Inaugural Address")
+##create plot
+LexDiv_plot <- ggplot(data=first_inaug, aes(x=Year, y=CTTR)) +
+  geom_line(colour = "blue", linejoin = "mitre") +
+  geom_point(colour = "Black") +  
+  theme(axis.text.x = element_text(vjust=1,angle=90)) +
+  geom_text(aes(label=Name), vjust=0,angle=90,size=2.5,hjust=0) +
+  scale_x_continuous(breaks = seq(1789,2017,4))
+##show plot
+LexDiv_plot
+```
+
+### Lexical Diversity in plotly
+
+```{r warning=FALSE,message=FALSE}
+##convert and show in plotly
+LexDiv_plotly <- ggplotly(LexDiv_plot)
+LexDiv_plotly
+```
+
+###Scatter Plot of Lexical Diversity & Length of Speech
+
+```{r warning=FALSE,message=FALSE}
+
+##################### scatter plot ##########
+
+##scatter plot of number of words vs Lexical Diversity Measure
+scat <- ggplot(inaug_speeches_clean, aes(x = num_words, y = CTTR)) +
+  geom_point(aes(color = Year))
+
+##convert to plotly and visualize
+scat <- ggplotly(scat)
+scat
+```
+
+We find that there have been 17 presidents that have been elected for a second term.  We also see
+thaere does not appear to be a trend in the variety of language used over the years (based on CTTR 
+measure of Lexical Doversity). Upon further examination, we see that the Lexical Diversity measure 
+we used may be biased towards longer responses. 
+
+<br>
+
+***
+
+# Conclusion
+
+This analysis looks to give several methods for which one can efficiently analyze large bodies of free-text. From there, it gives several approaches for quantifying the text in different ways.  This is intended for exploratory use and there are several more popular approaches that could be useful here including: sentiment analysis, Named-entity, and different unsupervised word embedding approaches (i.e. - Word2Vec).  I hope this analysis can help give you ideas for approaching this in your work.
