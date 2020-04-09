@@ -18,10 +18,13 @@ rpubs: https://rpubs.com/jjomalley94
   + Trend Surface Analysis
   + Krigging
   + Geographically-Based Prediction (using xgboost & h2o)
-  
+
 3. Free-Text Analysis
   + Exploratory Analysis
   + Frequency Counts (w N-grams)
   + Commonality/Comparison Cloud
   + Cosine Similarity
   + Lexical Diversity
+
+4. Image Classification
+  + Binary classification of cancer cell images
