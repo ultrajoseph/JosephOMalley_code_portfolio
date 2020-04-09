@@ -1,7 +1,7 @@
 ---
 title: "Factor Analysis - Socio-Economic determinants (retail)"
 author: "Joseph O'Malley"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: "April 12, 2019"
 output:
   html_document:
     highlight: tango

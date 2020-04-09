@@ -1,7 +1,7 @@
 ---
 title: "Text Analysis: United States Presidential Inauguration Speeches"
 author: "Joseph O'Malley"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
+date: "`August 10, 2018"
 output: 
   html_document:
     number_sections: false

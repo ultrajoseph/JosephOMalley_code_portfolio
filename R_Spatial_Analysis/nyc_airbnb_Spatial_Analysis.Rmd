@@ -17,6 +17,8 @@ output:
 
 ## Airbnb - NYC AirBnB prices
 
+Analyzing AirBnB data for New York City for the year of 2019 summer months.  This analysis looks only at "Entire home/apt", but does not take into account: number of beds/baths, square feet, customer reviews, etc.  It is based only on location (coordinates) within the city.  Data was retrieved from http://insideairbnb.com/get-the-data.html and initially contains 50,599 properties (before filtering/cleaning).
+
 #### import needed packages
 ```{r, echo = TRUE, warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
 require(deldir)
@@ -35,11 +37,15 @@ library(sp)
 ```
 
 ### Transform Data
+```{r, echo = FALSE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## define local file path
+path <- "/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/data/listings-2.csv"
+
+```
 #### import & subset nyc airbnb data
 ```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
 ## read in data from local repo
-## http://insideairbnb.com/get-the-data.html
-nyc_airbnb <- read.csv("/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/final_project/listings-2.csv")
+nyc_airbnb <- read.csv(path)
 
 ## check dimensions of data
 dim(nyc_airbnb)
@@ -73,10 +79,14 @@ class(c_sp)
 
 
 #### read in geojson file for polygons
+```{r, echo = FALSE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+polys_path <- "/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/data/neighbourhoods.geojson"
+```
+
 ```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
 ## read in geojson for polygons
 library(rgdal)
-ny <- readOGR("/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/final_project/neighbourhoods.geojson")
+ny <- readOGR(polys_path)
 
 class(ny)
 plot(ny)
@@ -142,12 +152,12 @@ tmap_arrange(idw1,idw2)
 Taking a look at proximity polygons, I would say using an alpha = 1 gives us little insight.  After switching to alpha = 2, you can start to see areas in manhattan and elsewhere that differentiate themselves.
   
 ### trend surface analysis
+
+Trend surface analysis uses a statistical approach that is a variation of OLS (using a linear surface trend formula.).  It is a simplistic model that doesnt account for spatial correlations of residuals.
+
 ```{r}
 ## replace point boundary extent
 ny_sp@bbox <- c_sp@bbox
-
-#dim(c_sp)
-#dim(ny_sp)
 
 ## plot prices
 tmap_mode('plot')
@@ -187,6 +197,7 @@ r   <- raster(dat.1st)
 r.m <- mask(r, ny_sp)
 
 levs <- c(-Inf,150,250,500,1000,Inf)
+
 # Plot the map
 tm_shape(r.m) + 
   tm_raster(n=10, palette="RdBu", 
@@ -227,6 +238,9 @@ Both trend surface models do a nice job of capturing the general relationship th
 
 
 ### Krigging
+
+Krigging brings a more statistical approach to creating these contours.  It estimates  the function, weights, and neighborhoods by combining elements from NN, IDW, and Trend surface.  There are several base Mathematical methods to choose from, I used with the spherical model.  The sphereical model seems to capture the continuous nature of the data the best and seems like a fairly accurate representation based on my knowledge of housing prices in different areas of New York.
+
 ```{r}
 evgm <- variogram(price~X+Y,c_sp,
                   boundaries=seq(0,250000,l=51))
@@ -234,7 +248,6 @@ evgm <- variogram(price~X+Y,c_sp,
 fvgm <- fit.variogram(evgm, fit.ranges=FALSE, fit.sills = FALSE,
                       vgm(psill=50000,model="Sph", range=1200,nugget=0))
 
-plot(evgm,model=fvgm)
 
 krig.est <- krige(price~1,c_sp,newdata=s.grid,model=fvgm)
 krig.grid <- SpatialPixelsDataFrame(krig.est,krig.est@data)
@@ -310,7 +323,7 @@ gwr.res
 #### read in data
 ```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
 ## take larger window of data
-nyc_airbnb <- read.csv("/Users/ultrajosef/Downloads/Macbook 2012 Files/BIA6313/final_project/listings-2.csv")
+nyc_airbnb <- read.csv(path)
 dim(nyc_airbnb)
 #nyc_airbnb <- filter(nyc_airbnb,str_detect(room_type,"Entire home/apt"))
 nyc_airbnb <- nyc_airbnb[nyc_airbnb$room_type == 'Entire home/apt',]
@@ -346,7 +359,7 @@ head(pred_glm)
 ```
 
 
-#### set up gwr
+#### set up geographically-weighted regression (gwr)
 ```{r, echo = TRUE, results='hide', warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
 library(mlr)
 # coordinates needed for the spatial partitioning

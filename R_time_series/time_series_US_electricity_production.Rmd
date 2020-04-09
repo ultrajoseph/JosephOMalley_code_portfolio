@@ -1,0 +1,178 @@
+---
+title: "Time Series - US Electricity Production"
+author: "Joseph O'Malley"
+date: "September 29, 2019"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+
+***
+
+US Electricity Production: Consider the total net generation of electricity (in billion kilowatt hours) by the U.S. electric industry (monthly for the period January 1973 – June 2013). In general there are two peaks per year: in mid-summer and mid-winter.  This analysis uses several methods to evaluate and model this electricity data.
+
+Based on Forecasting: Principles and Practice (Rob J Hyndman and George Athanasopoulos). 
+
+### load needed packages
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+library(fpp2)
+library (urca)
+library(forecast)
+library(fBasics)
+```
+
+### plot time-series
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+autoplot(usmelec, ylab="net generation of electricity (in billion kilowatt hours)", xlab="monthly for the period January 1973 – June 2013", main="total net generation of electricity (in billion kilowatt hours) by the U.S.") 
+```
+
+## Exploratory Analysis
+
+### 12-month moving average
+Examine the 12-month moving average of this series to see what kind of trend is involved.
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+plot(usmelec, col="grey")
+lines(ma(usmelec, order=12), col="red")
+```
+
+
+Taking the 12-month moving average makes it easier to see a clear trend. Aside from a noticable dip in the early-mid 1980s there is a consistent increasing linear trend until the late 2000s  where it dips and flattens to the end of the data in 2013.
+
+
+## Transform Data
+
+Check if any transformation is necessary.
+
+### un-transformed
+evaluate un-transformed data
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+normalTest(usmelec, method=c("jb")) 
+
+## 4 moments
+qqnorm(usmelec)
+qqline(usmelec, col = 2)
+skewness(usmelec)
+kurtosis(usmelec)
+```
+
+### box-cox transformed
+evaluate box-cox transformed data
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+## apply Box-Cox transform with - lambda ="auto"
+usmelec_box <- BoxCox(usmelec,lambda="auto")
+normalTest(usmelec_box, method=c("jb")) 
+
+qqnorm(usmelec_box)
+qqline(usmelec_box, col = 2)
+skewness(usmelec_box)
+kurtosis(usmelec_box)
+```
+
+#### transformation conclusion
+These pass the Jarque-Bera (JB) test for a normal distribution, with a p-value of 0.16e-05. Looking at the Q-Q plot appears to be tightly fit to the line.  Skewness is also reduced significantly, to 0.14 - a slight right skew (mean slightly more than the median). The kurtosis of the transformed data is to -1.01 which normally indicates less "peakedness" than a normal distribution or could also mean with negative excess kurtosis the outlier character (as measured by large |Z|-values) of the distribution is less extreme than that of a normal distribution. Looking at the Box-cox and log transformation do not result in better kurtosis or skewness. I will move forward with the non-transformed data.
+
+### stationary
+
+Check to see if data are stationary.  If needed, find an appropriate differencing which yields stationary data.
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+acf(usmelec)
+pacf(usmelec)
+## check number of differences
+ndiffs(usmelec, alpha = 0.05)
+```
+
+#### stationarity conclusion
+Looking at the ACF plot for 1st diff lagged correlation. The PACF also appears to have significant residual variation. Checking the ndiffs() tells us 1st differencing should be enough to remove stationarity.
+
+## ARIMA Models
+
+An autoregressive integrated moving average model is a form of regression analysis that gauges the strength of one dependent variable relative to other changing variables. The model's goal is to predict future securities or financial market moves by examining the differences between values in the series instead of through actual values.
+
+#### 3 components of ARIMA:
+
+*Autoregression (AR)* - refers to a model that shows a changing variable that regresses on its own lagged, or prior, values.
+
+*Integrated (I)* represents the differencing of raw observations to allow for the time series to become stationary, i.e., data values are replaced by the difference between the data values and the previous values.
+
+*Moving average (MA)* incorporates the dependency between an observation and a residual error from a moving average model applied to lagged observations.
+
+### ARIMA #1
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+plot(decompose(usmelec))
+
+fit.manual2 <- Arima(usmelec, order=c(12,1,0), seasonal=c(1,0,0), lambda=0)
+fit.manual2
+```
+
+This method (ARIMA(0,1,0)(1,0,0)[12]) uses 12 lagged observations ,with single differencing and a single lag on the residual variation.  The AICc is -1973.9, RMSE of 8.24.
+
+### ARIMA #2
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+fit.manual3 <- Arima(usmelec, order=c(6,1,0), seasonal=c(3,1,0), lambda=0) 
+fit.manual3
+```
+
+This method (ARIMA(6,1,6)(1,0,0)[12]) uses 6 lagged observations ,with single differencing and a 6 lagged forecast errors. The AICc is -2028.7, RMSE of 7.53.
+
+### Auto ARIMA
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+usmelec_auto_arima <- auto.arima(usmelec, seasonal=TRUE, stepwise=FALSE, approximation=FALSE, lambda="auto")
+usmelec_auto_arima
+```
+
+Auto.arima method (ARIMA(1,1,1)(2,1,1)[12]) uses 1 lag ,with single differencing and single moving average. On the residual component, it uses 2 lags, with single differencing and 1 period moving average. The AICc is -5802.5, and RMSE of 7.23.
+
+### ARIMA results
+
+The best model, according to AIC is the model (AICc of -5802.5) that uses auto.arima() - (ARIMA(1,1,1)(2,1,1)[12])
+
+
+### ARIMA model residuals
+Estimate the parameters of your best model and do diagnostic testing on the residuals. Check to make sure the residuals resemble white noise.
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+usmelec_auto_arima
+checkresiduals(usmelec_auto_arima)
+summary(usmelec_auto_arima)
+```
+
+#### conlusion on residuals
+Auto.arima method (ARIMA(1,1,1)(2,1,1)[12]) uses 1 lag ,with single differencing and single moving average. On the residual component, it uses 2 lags, with single differencing and 1 period moving average. The AICc is -5802.5, and RMSE of 7.23. The residual ACF plot and distrivution of residuals look pass the eye test and  is slightly above the p>0.5 theshold (at 0.83). Based on the residual ACF plot - the oscillating nature of these lags, only a few falling outside of the confidence interval for significance, and normal distribution of the residuals - I believe this to be white noise and acceptable.
+
+## Forecast (vs validation data)
+Forecast the next 15 years of electricity generation by the U.S. electric industry. Get the latest figures from the EIA to check the accuracy of your forecasts. Output results.
+
+```{r, echo = TRUE,warning=FALSE,message=FALSE, tidy=TRUE, tidy.opts = list(width.cutoff = 60)}
+plot(forecast(usmelec_auto_arima, h=180), ylab="total net generation of electricity (in billion kilowatt hours) by the U.S.")
+lines(ma(usmelec, 12), col="red")
+
+## export predictions to csv for comparison to actuals (from EIA)
+#library(data.table)
+#forecast_usmelec <- as.data.table(forecast(usmelec_auto_arima, h=180))
+#forecast_usmelec
+#write.csv(forecast_usmelec, file ='forecast_usmelec.csv')
+```
+
+### Forecast vs Actuals
+
+```{r echo=FALSE, fig.height=5, fig.align="center"}
+knitr::include_graphics('/Users/ultrajosef/Documents/BIA6315/hw3/EIA_actuals.png')
+```
+
+### Conclusion
+
+Based on my comparison, these values are still useful 6 years (July 2019) after the dataset we trained from ended (June 2013) - as you can see from the chart the average absolute percentage error was only 2.17 percent and an RMSE of 9.71, which is only slightly below what we observed in the best training model (RMSE = 7.23). Some decay in the model should be expected, but these predictions are clearly still useful and with continued retraining could be even better than what we see 6 years out. This was attained by comparing actual values from EIA to the predicted values between January 2017 and July 2019.
+
+
+***
+

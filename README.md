@@ -10,7 +10,6 @@ rpubs: https://rpubs.com/jjomalley94
 1. Unsupervised Learning
   + Clustering
   + Factor Analysis
-  + Weighted Regression
   + Flight Delay Analysis
 
 2. Spatial Analysis
